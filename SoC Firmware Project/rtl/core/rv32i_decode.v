@@ -14,7 +14,8 @@ module rv32i_decode (
 
     output wire [2:0] decode_funct3,
     output reg lui,
-    output reg auipc
+    output reg auipc,
+    output reg jalr
 );
     wire [6:0] opcode;
     wire [2:0] funct3;
@@ -75,6 +76,7 @@ module rv32i_decode (
         alu_op = 4'b0000;
         lui = 0;
         auipc = 0;
+        jalr = 0;
         case (opcode)
             7'b0110011: begin
                 reg_write = 1;
@@ -227,6 +229,7 @@ module rv32i_decode (
                 jump = 1;
                 mem_to_reg = 0;
                 alu_op = 4'b0000;
+                jalr = 1;
             end // I type, same as I type, JALR uses I-type immediate
             7'b0110111: begin
                 reg_write = 1;

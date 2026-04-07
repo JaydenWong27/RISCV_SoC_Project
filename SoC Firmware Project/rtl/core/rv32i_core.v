@@ -26,6 +26,7 @@ wire decode_reg_write, decode_mem_read, decode_mem_write;
 wire decode_branch, decode_jump, decode_mem_to_reg;
 wire [2:0] decode_funct3;
 wire decode_lui, decode_auipc;
+wire decode_jalr;
 
 
 //regfile outputs
@@ -38,10 +39,30 @@ wire alu_zero;
 
 // Program Counter
 reg [31:0] pc;
+reg [31:0] pc_prev;   // PC delayed by 1 cycle, aligned with BRAM output
+reg flush_delay;       // extends flush by 1 extra cycle for BRAM latency
 
 //IF/ID pipeline register
 reg [31:0] if_id_instr; //IF/ID
 reg [31:0] if_id_pc;
+
+// Single-entry prefetch buffer between synchronous BRAM and IF/ID.
+//
+// The BRAM has 1-cycle read latency: a fetch issued at PC appears on
+// instr_data the following clock. This buffer holds that output so the
+// IF/ID stage always sees a valid instruction.
+//
+// Normal flow: buffer captures instr_data each cycle; IF/ID latches from
+// the buffer.
+//
+// Stall flow: when pipeline_stall is asserted and the buffer already holds
+// a valid entry, the buffer is frozen. If the buffer is empty (startup /
+// post-flush) it fills even during a stall so we don't lose the first word.
+//
+// Flush: buffer is cleared (NOP inserted) on branch/jump or flush_delay.
+reg [31:0] fetch_buf_instr;
+reg [31:0] fetch_buf_pc;
+reg        fetch_buf_valid;
 
 //ID/EX pipeline register
 reg[31:0] id_ex_pc;
@@ -60,6 +81,9 @@ reg id_ex_use_imm;
 reg [2:0] id_ex_funct3;
 reg id_ex_lui;
 reg id_ex_auipc;
+reg id_ex_jalr;
+reg [4:0] id_ex_rs1;
+reg [4:0] id_ex_rs2;
 
 
 // EX/MEM pipeline register
@@ -74,6 +98,9 @@ reg ex_mem_jump;
 reg [31:0] ex_mem_pc;
 reg ex_mem_lui;
 reg [31:0] ex_mem_imm;
+reg [2:0] ex_mem_funct3;
+reg [1:0] ex_mem_addr_low;
+reg [31:0] ex_mem_mem_data;
 
 // MEM/WB pipeline register
 reg [31:0] mem_wb_alu_result;
@@ -85,6 +112,8 @@ reg mem_wb_jump;
 reg [31:0] mem_wb_pc;
 reg mem_wb_lui;
 reg [31:0] mem_wb_imm;
+reg [2:0] mem_wb_funct3;
+reg [1:0] mem_wb_addr_low;
 
 //writeback signals
 wire[4:0] wb_rd;
@@ -104,34 +133,75 @@ wire hazard_flush;
 //branch target
 wire [31:0] branch_target;
 
+// Memory stall: wait 1 cycle for BRAM registered read to complete
+reg mem_wait;
+wire mem_stall = ex_mem_mem_read && !mem_wait;
+wire pipeline_stall = hazard_stall || mem_stall;
+
 wire branch_condition;
 assign branch_condition = (id_ex_funct3 == 3'b000) ?  alu_zero :      // BEQ
                           (id_ex_funct3 == 3'b001) ? !alu_zero :      // BNE
-                          (id_ex_funct3 == 3'b100) ?  alu_result[31]: // BLT
-                          (id_ex_funct3 == 3'b101) ? !alu_result[31]: // BGE
-                          (id_ex_funct3 == 3'b110) ?  alu_result[31]: // BLTU
-                          (id_ex_funct3 == 3'b111) ? !alu_result[31]: // BGEU
+                          (id_ex_funct3 == 3'b100) ?  alu_result[0] : // BLT
+                          (id_ex_funct3 == 3'b101) ? !alu_result[0] : // BGE
+                          (id_ex_funct3 == 3'b110) ?  alu_result[0] : // BLTU
+                          (id_ex_funct3 == 3'b111) ? !alu_result[0] : // BGEU
                           1'b0;
 
-assign hazard_branch_taken = id_ex_branch && branch_condition;
+wire branch_taken = id_ex_branch && branch_condition;
+wire jump_taken = id_ex_jump;
+wire [31:0] jump_target = id_ex_jalr ? (alu_result & 32'hFFFFFFFE) : branch_target;
 
+assign hazard_branch_taken = branch_taken || jump_taken;
+
+wire [31:0] ex_forward_data = ex_mem_mem_read ? (ex_mem_mem_data & 32'hff) :
+                              ex_mem_lui ? ex_mem_imm :
+                              ex_mem_jump ? (ex_mem_pc + 4) :
+                              ex_mem_alu_result;
+wire [31:0] rs1_forwarded = (ex_mem_reg_write && !ex_mem_mem_read &&
+                             (ex_mem_rd != 5'b0) && (ex_mem_rd == id_ex_rs1)) ? ex_forward_data :
+                            (mem_wb_reg_write && (mem_wb_rd != 5'b0) &&
+                             (mem_wb_rd == id_ex_rs1)) ? wb_rd_data :
+                            id_ex_rs1_data;
+wire [31:0] rs2_forwarded = (ex_mem_reg_write && !ex_mem_mem_read &&
+                             (ex_mem_rd != 5'b0) && (ex_mem_rd == id_ex_rs2)) ? ex_forward_data :
+                            (mem_wb_reg_write && (mem_wb_rd != 5'b0) &&
+                             (mem_wb_rd == id_ex_rs2)) ? wb_rd_data :
+                            id_ex_rs2_data;
+
+wire [31:0] store_data = (ex_mem_funct3 == 3'b000) ? ({4{ex_mem_rs2_data[7:0]}} << (8 * ex_mem_addr_low)) :
+                         (ex_mem_funct3 == 3'b001) ? ({2{ex_mem_rs2_data[15:0]}} << (8 * ex_mem_addr_low)) :
+                         ex_mem_rs2_data;
+wire [3:0] store_sel = (ex_mem_funct3 == 3'b000) ? (4'b0001 << ex_mem_addr_low) :
+                       (ex_mem_funct3 == 3'b001) ? (ex_mem_addr_low[1] ? 4'b1100 : 4'b0011) :
+                       4'b1111;
+wire [31:0] load_shifted = mem_wb_mem_data >> (8 * mem_wb_addr_low);
+
+wire [31:0] load_data = (mem_wb_funct3 == 3'b000) ? {{24{load_shifted[7]}}, load_shifted[7:0]} :
+                        (mem_wb_funct3 == 3'b001) ? (mem_wb_addr_low[1] ?
+                            {{16{mem_wb_mem_data[31]}}, mem_wb_mem_data[31:16]} :
+                            {{16{mem_wb_mem_data[15]}}, mem_wb_mem_data[15:0]}) :
+                        (mem_wb_funct3 == 3'b100) ? {24'b0, load_shifted[7:0]} :
+                        (mem_wb_funct3 == 3'b101) ? (mem_wb_addr_low[1] ?
+                            {16'b0, mem_wb_mem_data[31:16]} :
+                            {16'b0, mem_wb_mem_data[15:0]}) :
+                        mem_wb_mem_data;
 
 //ALU inputs
-assign alu_a = id_ex_auipc ? id_ex_pc : id_ex_rs1_data;
-assign alu_b = (id_ex_use_imm)? id_ex_imm : id_ex_rs2_data;
+assign alu_a = id_ex_auipc ? id_ex_pc : rs1_forwarded;
+assign alu_b = id_ex_use_imm ? id_ex_imm : rs2_forwarded;
 
 // Writeback: mux between ALU result and memory data
 assign wb_rd_data = mem_wb_lui ? mem_wb_imm :
                    mem_wb_jump ? mem_wb_pc + 4 :
-                   mem_wb_mem_to_reg ? mem_wb_mem_data :
+                   mem_wb_mem_to_reg ? load_data :
                    mem_wb_alu_result;
 assign wb_rd = mem_wb_rd;
 assign wb_reg_write = mem_wb_reg_write;
 
 //Hazard input: connect pipeline stage signals to hazard unit
-assign hazard_ex_mw_rd = id_ex_rd;
-assign hazard_ex_mw_reg_write = id_ex_reg_write;
-assign hazard_ex_mw_mem_read = id_ex_mem_read;
+assign hazard_ex_mw_rd = ex_mem_rd;
+assign hazard_ex_mw_reg_write = ex_mem_reg_write;
+assign hazard_ex_mw_mem_read = ex_mem_mem_read;
 assign hazard_id_rs1 = decode_rs1;
 assign hazard_id_rs2 = decode_rs2;
 
@@ -146,11 +216,11 @@ assign branch_target = id_ex_pc + id_ex_imm;
 //wishbone data memory outputs
 
 assign wb_addr = ex_mem_alu_result;
-assign wb_dat_m2s = ex_mem_rs2_data;
+assign wb_dat_m2s = store_data;
 assign wb_we = ex_mem_mem_write;
 assign wb_cyc = ex_mem_mem_read | ex_mem_mem_write;
 assign wb_stb = ex_mem_mem_read | ex_mem_mem_write;
-assign wb_sel = 4'b1111;
+assign wb_sel = ex_mem_mem_write ? store_sel : 4'b1111;
 
 
 
@@ -169,7 +239,8 @@ assign wb_sel = 4'b1111;
     .mem_to_reg(decode_mem_to_reg),
     .decode_funct3(decode_funct3),
     .lui(decode_lui),
-    .auipc(decode_auipc)
+    .auipc(decode_auipc),
+    .jalr(decode_jalr)
 );
 
 rv32i_regfile regfile(
@@ -204,30 +275,58 @@ rv32i_hazard hazard (
 );
 
 always @(posedge clk) begin
-    if (rst)
+    if (rst) begin
         pc <= 0;
-    else if (hazard_stall)
-        pc <= pc; // freeze if there is hazard
-    else if (hazard_branch_taken)
-        pc <= branch_target; // jump to branch
-    else
-        pc <= pc + 4; // normal; next instruction
+        pc_prev <= 0;
+        flush_delay <= 0;
+        mem_wait <= 0;
+    end else begin
+        flush_delay <= hazard_flush;
+        pc_prev <= pc;
+        mem_wait <= ex_mem_mem_read && !mem_wait;
+        if (pipeline_stall)
+            pc <= pc; // freeze if there is hazard or memory stall
+        else if (jump_taken)
+            pc <= jump_target; // JAL: pc+imm, JALR: (rs1+imm)&~1
+        else if (branch_taken)
+            pc <= branch_target; // conditional branch
+        else
+            pc <= pc + 4; // normal; next instruction
+    end
 end
 
-//IF/ID block : latches fetched instruction
+// Fetch buffer: tracks BRAM output one cycle behind PC.
+// Freezes during any pipeline stall so a pending instruction is not lost
+// when BRAM advances its output on the next cycle.
 always @(posedge clk) begin
-    if (rst || hazard_flush) begin
-        if_id_instr <= 32'h00000013; // flush then do nothing
-        if_id_pc <= 0;
-    end else if (!hazard_stall) begin
-        if_id_instr <= instr_data; //latch new instructions , normal then grab instruction from memory
-        if_id_pc <= pc;
+    if (rst || hazard_flush || flush_delay) begin
+        fetch_buf_instr <= 32'h00000013;
+        fetch_buf_pc    <= 0;
+        fetch_buf_valid <= 0;
+    end else if (!pipeline_stall || !fetch_buf_valid) begin
+        // Normal: slide the BRAM output into the buffer.
+        // Also fills the buffer from empty (startup / post-flush).
+        fetch_buf_instr <= instr_data;
+        fetch_buf_pc    <= pc_prev;
+        fetch_buf_valid <= 1;
+    end
+    // else: stall with a valid entry — hold until IF/ID can consume it.
+end
+
+//IF/ID block: latches from the fetch buffer (total 2-cycle BRAM-to-IF/ID latency)
+always @(posedge clk) begin
+    if (rst || hazard_flush || flush_delay) begin
+        if_id_instr <= 32'h00000013;
+        if_id_pc    <= 0;
+    end else if (!pipeline_stall && fetch_buf_valid) begin
+        if_id_instr <= fetch_buf_instr;
+        if_id_pc    <= fetch_buf_pc;
     end
 end
 
 //ID/EX block: latches decode outputs
 always @(posedge clk) begin
-    if (rst || hazard_flush) begin
+    if (rst || hazard_flush || flush_delay) begin
         id_ex_rs1_data <= 0;
         id_ex_rs2_data <= 0;
         id_ex_imm <= 0;
@@ -244,7 +343,30 @@ always @(posedge clk) begin
         id_ex_funct3 <= 0;
         id_ex_lui <= 0;
         id_ex_auipc <= 0;
-    end else if (!hazard_stall) begin
+        id_ex_jalr <= 0;
+        id_ex_rs1 <= 0;
+        id_ex_rs2 <= 0;
+    end else if (hazard_stall) begin
+        id_ex_rs1_data <= 0;
+        id_ex_rs2_data <= 0;
+        id_ex_imm <= 0;
+        id_ex_rd <= 0;
+        id_ex_alu_op <= 0;
+        id_ex_reg_write <= 0;
+        id_ex_mem_read <= 0;
+        id_ex_mem_write <= 0;
+        id_ex_branch <= 0;
+        id_ex_jump <= 0;
+        id_ex_mem_to_reg <= 0;
+        id_ex_pc <= 0;
+        id_ex_use_imm <= 0;
+        id_ex_funct3 <= 0;
+        id_ex_lui <= 0;
+        id_ex_auipc <= 0;
+        id_ex_jalr <= 0;
+        id_ex_rs1 <= 0;
+        id_ex_rs2 <= 0;
+    end else if (!pipeline_stall) begin
         id_ex_rs1_data <= regfile_rs1_data; //latch register value
         id_ex_rs2_data <= regfile_rs2_data; 
         id_ex_imm <= decode_imm;
@@ -257,10 +379,14 @@ always @(posedge clk) begin
         id_ex_jump <= decode_jump;
         id_ex_mem_to_reg <= decode_mem_to_reg;
         id_ex_pc <= if_id_pc;
-        id_ex_use_imm <= (if_id_instr[6:0] != 7'b0110011);
+        id_ex_use_imm <= (if_id_instr[6:0] != 7'b0110011) &&
+                         (if_id_instr[6:0] != 7'b1100011);
         id_ex_funct3 <= decode_funct3;
         id_ex_lui <= decode_lui;
         id_ex_auipc <= decode_auipc;
+        id_ex_jalr <= decode_jalr;
+        id_ex_rs1 <= decode_rs1;
+        id_ex_rs2 <= decode_rs2;
     end
 end
 //ex/mem block :latches ALU result
@@ -278,10 +404,15 @@ always @(posedge clk) begin
         ex_mem_pc <= 0;
         ex_mem_lui <= 0;
         ex_mem_imm <= 0;
+        ex_mem_funct3 <= 0;
+        ex_mem_addr_low <= 0;
+        ex_mem_mem_data <= 0;
 
+    end else if (mem_stall) begin
+        // freeze: keep load in MEM stage while waiting for BRAM data
     end else begin
         ex_mem_alu_result <= alu_result;
-        ex_mem_rs2_data <= id_ex_rs2_data;
+        ex_mem_rs2_data <= rs2_forwarded;
         ex_mem_rd <= id_ex_rd;
         ex_mem_reg_write <= id_ex_reg_write;
         ex_mem_mem_read <= id_ex_mem_read;
@@ -291,6 +422,9 @@ always @(posedge clk) begin
         ex_mem_pc <= id_ex_pc;
         ex_mem_lui <= id_ex_lui;
         ex_mem_imm <= id_ex_imm;
+        ex_mem_funct3 <= id_ex_funct3;
+        ex_mem_addr_low <= alu_result[1:0];
+        ex_mem_mem_data <= wb_dat_s2m;
     end
  end
 
@@ -306,6 +440,10 @@ always @(posedge clk) begin
         mem_wb_pc <= 0;
         mem_wb_lui <= 0;
         mem_wb_imm <= 0;
+        mem_wb_funct3 <= 0;
+        mem_wb_addr_low <= 0;
+    end else if (mem_stall) begin
+        // freeze: wait for BRAM data before latching into WB
     end else begin
         mem_wb_alu_result <= ex_mem_alu_result; // ALU result passes through
         mem_wb_mem_data <= wb_dat_s2m; //memory data arrives here
@@ -316,6 +454,8 @@ always @(posedge clk) begin
         mem_wb_pc <= ex_mem_pc;
         mem_wb_lui <= ex_mem_lui;
         mem_wb_imm <= ex_mem_imm;
+        mem_wb_funct3 <= ex_mem_funct3;
+        mem_wb_addr_low <= ex_mem_addr_low;
     end
  end
 

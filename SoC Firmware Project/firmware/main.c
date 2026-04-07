@@ -14,8 +14,7 @@ void uart_print(const char* s){
 }
 
 int main(void){
-    GPIO_DIR = 0xFF;
-    uart_print("Hello from RISC-V!\n");
+    GPIO_DIR = 0x3F;
     for(volatile int i = 0; i < 100000; i++);
 
     while (1) {
@@ -26,4 +25,3 @@ int main(void){
     }
     return 0;
 }
-
