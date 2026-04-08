@@ -7,9 +7,6 @@ module soc_top (
     output wire pwm_out
 );
 
-// Internal power-on reset: holds CPU in reset for 128 clock cycles after
-// power-up, then releases. Also re-asserts when the reset button is pressed
-// (pin is active-low, so !rst == button pressed).
 reg [7:0] por_count;
 always @(posedge clk) begin
     if (!rst)
@@ -17,7 +14,7 @@ always @(posedge clk) begin
     else if (!por_count[7])
         por_count <= por_count + 1;
 end
-wire rst_internal = ~por_count[7];  // HIGH (reset) for 128 cycles, then LOW
+wire rst_internal = ~por_count[7]; 
 
 wire [31:0] cpu_instr_addr;
 wire [31:0] cpu_instr_data;
@@ -82,14 +79,12 @@ wire gpio_wb_cyc;
 wire pwm_wb_cyc;
 wire timer_wb_cyc;
 
-// BRAM data port wiring (directly from CPU data bus, selected by interconnect)
 assign bram_wb_addr    = cpu_wb_addr;
 assign bram_wb_dat_m2s = cpu_wb_dat_m2s;
 assign bram_wb_cyc     = cpu_wb_cyc;
 assign bram_wb_we      = cpu_wb_we;
 assign bram_wb_sel     = cpu_wb_sel;
 
-// Instruction port is always available (dual-port BRAM, no arbitration needed)
 assign cpu_instr_ack = 1'b1;
 
 assign uart_wb_cyc  = cpu_wb_cyc;

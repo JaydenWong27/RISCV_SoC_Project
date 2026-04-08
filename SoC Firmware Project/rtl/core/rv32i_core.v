@@ -39,26 +39,14 @@ wire alu_zero;
 
 // Program Counter
 reg [31:0] pc;
-reg [31:0] pc_prev;   // PC delayed by 1 cycle, aligned with BRAM output
-reg flush_delay;       // extends flush by 1 extra cycle for BRAM latency
+reg [31:0] pc_prev;   
+reg flush_delay;       
 
 //IF/ID pipeline register
-reg [31:0] if_id_instr; //IF/ID
+reg [31:0] if_id_instr; 
 reg [31:0] if_id_pc;
 
-// Single-entry prefetch buffer between synchronous BRAM and IF/ID.
-//
-// The BRAM has 1-cycle read latency: a fetch issued at PC appears on
-// instr_data the following clock. This buffer holds that output so the
-// IF/ID stage always sees a valid instruction.
-//
-// Normal flow: buffer captures instr_data each cycle; IF/ID latches from
-// the buffer.
-//
-// Stall flow: when pipeline_stall is asserted and the buffer already holds
-// a valid entry, the buffer is frozen. If the buffer is empty (startup /
-// post-flush) it fills even during a stall so we don't lose the first word.
-//
+
 // Flush: buffer is cleared (NOP inserted) on branch/jump or flush_delay.
 reg [31:0] fetch_buf_instr;
 reg [31:0] fetch_buf_pc;
@@ -139,8 +127,8 @@ wire mem_stall = ex_mem_mem_read && !mem_wait;
 wire pipeline_stall = hazard_stall || mem_stall;
 
 wire branch_condition;
-assign branch_condition = (id_ex_funct3 == 3'b000) ?  alu_zero :      // BEQ
-                          (id_ex_funct3 == 3'b001) ? !alu_zero :      // BNE
+assign branch_condition = (id_ex_funct3 == 3'b000) ?  alu_zero : // BEQ
+                          (id_ex_funct3 == 3'b001) ? !alu_zero : // BNE
                           (id_ex_funct3 == 3'b100) ?  alu_result[0] : // BLT
                           (id_ex_funct3 == 3'b101) ? !alu_result[0] : // BGE
                           (id_ex_funct3 == 3'b110) ?  alu_result[0] : // BLTU
@@ -295,22 +283,16 @@ always @(posedge clk) begin
     end
 end
 
-// Fetch buffer: tracks BRAM output one cycle behind PC.
-// Freezes during any pipeline stall so a pending instruction is not lost
-// when BRAM advances its output on the next cycle.
 always @(posedge clk) begin
     if (rst || hazard_flush || flush_delay) begin
         fetch_buf_instr <= 32'h00000013;
         fetch_buf_pc    <= 0;
         fetch_buf_valid <= 0;
     end else if (!pipeline_stall || !fetch_buf_valid) begin
-        // Normal: slide the BRAM output into the buffer.
-        // Also fills the buffer from empty (startup / post-flush).
         fetch_buf_instr <= instr_data;
         fetch_buf_pc    <= pc_prev;
         fetch_buf_valid <= 1;
     end
-    // else: stall with a valid entry — hold until IF/ID can consume it.
 end
 
 //IF/ID block: latches from the fetch buffer (total 2-cycle BRAM-to-IF/ID latency)
@@ -332,7 +314,7 @@ always @(posedge clk) begin
         id_ex_imm <= 0;
         id_ex_rd <= 0;
         id_ex_alu_op <= 0;
-        id_ex_reg_write <= 0; // flush then zero everything out
+        id_ex_reg_write <= 0; 
         id_ex_mem_read <= 0;
         id_ex_mem_write <= 0;
         id_ex_branch <= 0;
@@ -409,7 +391,6 @@ always @(posedge clk) begin
         ex_mem_mem_data <= 0;
 
     end else if (mem_stall) begin
-        // freeze: keep load in MEM stage while waiting for BRAM data
     end else begin
         ex_mem_alu_result <= alu_result;
         ex_mem_rs2_data <= rs2_forwarded;
@@ -445,9 +426,9 @@ always @(posedge clk) begin
     end else if (mem_stall) begin
         // freeze: wait for BRAM data before latching into WB
     end else begin
-        mem_wb_alu_result <= ex_mem_alu_result; // ALU result passes through
-        mem_wb_mem_data <= wb_dat_s2m; //memory data arrives here
-        mem_wb_rd <= ex_mem_rd; //still tracking destination
+        mem_wb_alu_result <= ex_mem_alu_result; 
+        mem_wb_mem_data <= wb_dat_s2m; 
+        mem_wb_rd <= ex_mem_rd; 
         mem_wb_reg_write <= ex_mem_reg_write;
         mem_wb_mem_to_reg <= ex_mem_mem_to_reg;
         mem_wb_jump <= ex_mem_jump;

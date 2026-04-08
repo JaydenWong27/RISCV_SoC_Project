@@ -5,3 +5,13 @@ SoC Firmware Project/SoC Firmware Project.gprj.user
 SoC Firmware Project/sim/__pycache__/
 SoC Firmware Project/sim/sim_build/
 SoC Firmware Project/sim/results.xml
+
+# Gowin synthesis output
+SoC Firmware Project/impl/
+
+# Binary build artifacts
+SoC Firmware Project/firmware/firmware.bin
+SoC Firmware Project/firmware/firmware.elf
+
+# Claude Code internal files
+.claude/

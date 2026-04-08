@@ -122,7 +122,7 @@ module rv32i_decode (
                     alu_op = 4'b0000;
                 end
                 endcase
-            end // r type    , no immediate, imm = 0
+            end 
             7'b0010011: begin
                 reg_write = 1;
                 mem_read = 0;
@@ -164,7 +164,7 @@ module rv32i_decode (
                     alu_op = 4'b0000;
                 end
                 endcase
-            end // i type, i type immediate (instr[31:20], sign extend)
+            end // I type,i type immediate (instr[31:20], sign extend)
             7'b0000011:  begin
                 reg_write = 1;
                 mem_read = 1;

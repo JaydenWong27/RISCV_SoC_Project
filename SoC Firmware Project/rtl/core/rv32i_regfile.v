@@ -18,7 +18,7 @@ module rv32i_regfile (
         if(rs1_addr == 0)begin
             rs1_data = 0;
         end else if (rd_we && rd_addr != 0 && rd_addr == rs1_addr) begin
-            rs1_data = rd_data; // bypass: WB writing same reg ID is reading
+            rs1_data = rd_data; 
         end else begin
             rs1_data = regs[rs1_addr];
         end
@@ -26,7 +26,7 @@ module rv32i_regfile (
         if(rs2_addr == 0) begin
             rs2_data = 0;
         end else if (rd_we && rd_addr != 0 && rd_addr == rs2_addr) begin
-            rs2_data = rd_data; // bypass: WB writing same reg ID is reading
+            rs2_data = rd_data; 
         end else begin
             rs2_data = regs[rs2_addr];
         end

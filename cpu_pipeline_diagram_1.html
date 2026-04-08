@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>RISC-V 3-Stage CPU Pipeline — Detailed Internal View</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{
+    background:#111118;
+    font-family:'Consolas','SF Mono','Fira Code',monospace;
+    color:#c8c8d0;
+    padding:24px;
+    overflow:auto;
+  }
+  h1{text-align:center;color:#6eb5ff;font-size:17px;margin-bottom:4px;font-weight:500}
+  .sub{text-align:center;color:#777;font-size:12px;margin-bottom:20px}
+  svg{display:block;margin:0 auto}
+  .stage-label{font-size:15px;font-weight:700;letter-spacing:0.5px}
+  .box-title{font-size:11px;font-weight:600}
+  .box-detail{font-size:9.5px;fill:#999}
+  .signal{font-size:9px}
+  .signal-ctrl{font-size:9px;fill:#e8b84a}
+  .signal-data{font-size:9px;fill:#6eb5ff}
+  .signal-back{font-size:9px;fill:#f06868}
+  .signal-bus{font-size:9px;fill:#5cc870}
+  .note-title{font-size:10px;font-weight:600}
+  .note-body{font-size:9px;fill:#999}
+  .pipe-reg-label{font-size:11px;font-weight:600}
+  .pipe-reg-signal{font-size:9px}
+  .pipe-reg-ctrl{font-size:9px;fill:#e8b84a}
+</style>
+</head>
+<body>
+<h1>RISC-V 3-Stage CPU Pipeline &#8212; Detailed Internal View</h1>
+<p class="sub">RV32I &#183; Wishbone B4 bus &#183; Stall-based hazard handling &#183; No forwarding</p>
+
+<svg width="1460" height="880" viewBox="0 0 1460 880" xmlns="http://www.w3.org/2000/svg">
+<defs>
+  <marker id="a" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <path d="M0,0 L7,2.5 L0,5Z" fill="#6eb5ff"/></marker>
+  <marker id="a-r" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <path d="M0,0 L7,2.5 L0,5Z" fill="#f06868"/></marker>
+  <marker id="a-y" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <path d="M0,0 L7,2.5 L0,5Z" fill="#e8b84a"/></marker>
+  <marker id="a-g" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <path d="M0,0 L7,2.5 L0,5Z" fill="#5cc870"/></marker>
+</defs>
+
+<!-- ============================================================ -->
+<!-- LEGEND                                                        -->
+<!-- ============================================================ -->
+<rect x="16" y="12" width="200" height="105" rx="5" fill="#181824" stroke="#333" stroke-width="0.8"/>
+<text x="26" y="30" class="note-title" fill="#ccc">Legend</text>
+<line x1="26" y1="44" x2="52" y2="44" stroke="#6eb5ff" stroke-width="1.5" marker-end="url(#a)"/>
+<text x="60" y="48" class="signal-data">Forward data flow</text>
+<line x1="26" y1="62" x2="52" y2="62" stroke="#f06868" stroke-width="1.5" marker-end="url(#a-r)"/>
+<text x="60" y="66" class="signal-back">Backward (branch / writeback)</text>
+<line x1="26" y1="80" x2="52" y2="80" stroke="#e8b84a" stroke-width="1.5" marker-end="url(#a-y)"/>
+<text x="60" y="84" class="signal-ctrl">Control signals</text>
+<line x1="26" y1="98" x2="52" y2="98" stroke="#5cc870" stroke-width="1.5" marker-end="url(#a-g)"/>
+<text x="60" y="102" class="signal-bus">To / from Wishbone bus</text>
+
+<!-- ============================================================ -->
+<!-- STAGE 1: FETCH                                                -->
+<!-- ============================================================ -->
+<rect x="30" y="140" width="270" height="480" rx="8" fill="#14141f" stroke="#6eb5ff" stroke-width="1.5"/>
+<text x="165" y="165" fill="#6eb5ff" class="stage-label" text-anchor="middle">FETCH (Stage 1)</text>
+
+<!-- Stall signal to PC -->
+<text x="240" y="192" class="signal-ctrl" text-anchor="middle">stall</text>
+<text x="240" y="203" fill="#b08830" font-size="8" text-anchor="middle">(freezes PC)</text>
+<line x1="240" y1="208" x2="240" y2="228" stroke="#e8b84a" stroke-width="1.2" marker-end="url(#a-y)"/>
+
+<!-- PC+4 Adder -->
+<rect x="55" y="230" width="74" height="34" rx="4" fill="#1a1a2a" stroke="#555" stroke-width="0.8"/>
+<text x="92" y="251" fill="#bbb" font-size="10" text-anchor="middle">PC + 4</text>
+
+<!-- PC MUX (trapezoid) -->
+<path d="M152,220 L192,238 L192,302 L152,320Z" fill="#1a1a2a" stroke="#6eb5ff" stroke-width="1.2"/>
+<text x="170" y="274" fill="#6eb5ff" font-size="10" text-anchor="middle">MUX</text>
+
+<!-- PC+4 to MUX input 0 -->
+<line x1="129" y1="247" x2="152" y2="247" stroke="#6eb5ff" stroke-width="1.2" marker-end="url(#a)"/>
+
+<!-- Branch target to MUX input 1 -->
+<text x="62" y="293" class="signal-back">branch_target[31:0]</text>
+<text x="62" y="304" fill="#c05050" font-size="8">(from Execute)</text>
+<line x1="60" y1="310" x2="152" y2="310" stroke="#f06868" stroke-width="1.2" marker-end="url(#a-r)"/>
+
+<!-- pc_sel to MUX select -->
+<text x="172" y="338" class="signal-ctrl" text-anchor="middle">pc_sel</text>
+<text x="172" y="350" fill="#b08830" font-size="8" text-anchor="middle">(from Execute)</text>
+<line x1="172" y1="326" x2="172" y2="320" stroke="#e8b84a" stroke-width="1" marker-end="url(#a-y)"/>
+
+<!-- PC Register -->
+<rect x="210" y="245" width="60" height="40" rx="4" fill="#1a1a2a" stroke="#6eb5ff" stroke-width="1.5"/>
+<text x="240" y="263" fill="#fff" font-size="10" text-anchor="middle">PC</text>
+<text x="240" y="277" fill="#999" font-size="8" text-anchor="middle">[31:0]</text>
+
+<!-- MUX to PC -->
+<line x1="192" y1="270" x2="210" y2="270" stroke="#6eb5ff" stroke-width="1.2" marker-end="url(#a)"/>
+
+<!-- PC feedback to PC+4 (wrap around below) -->
+<path d="M240,285 L240,375 L46,375 L46,247 L55,247" fill="none" stroke="#6eb5ff" stroke-width="0.8" stroke-dasharray="4,3"/>
+
+<!-- PC to instr_addr to Wishbone -->
+<path d="M240,285 L240,410 L115,410 L115,480" fill="none" stroke="#5cc870" stroke-width="1.2"/>
+<line x1="115" y1="480" x2="115" y2="530" stroke="#5cc870" stroke-width="1.2" marker-end="url(#a-g)"/>
+<text x="120" y="512" class="signal-bus">instr_addr[31:0]</text>
+
+<!-- instr_data from Wishbone -->
+<line x1="195" y1="530" x2="195" y2="480" stroke="#5cc870" stroke-width="1.2" marker-end="url(#a-g)"/>
+<text x="200" y="525" class="signal-bus">instr_data[31:0]</text>
+
+<!-- Wishbone (Fetch) bus box -->
+<rect x="75" y="535" width="170" height="26" rx="4" fill="#0d2a0d" stroke="#5cc870" stroke-width="0.8"/>
+<text x="160" y="553" fill="#5cc870" font-size="9" text-anchor="middle">To / From Wishbone Bus (BRAM)</text>
+
+<!-- ============================================================ -->
+<!-- PIPELINE REGISTER: IF/EX                                      -->
+<!-- ============================================================ -->
+<rect x="320" y="175" width="90" height="420" rx="5" fill="#1c1820" stroke="#e0913a" stroke-width="1.5"/>
+<text x="365" y="200" fill="#e0913a" class="pipe-reg-label" text-anchor="middle">IF / EX</text>
+<text x="365" y="214" fill="#e0913a" font-size="10" text-anchor="middle">Register</text>
+
+<!-- Stall input at top (freezes register) -->
+<line x1="345" y1="152" x2="345" y2="175" stroke="#e8b84a" stroke-width="1.2" marker-end="url(#a-y)"/>
+<text x="345" y="147" class="signal-ctrl" text-anchor="middle">stall (freezes)</text>
+
+<!-- Branch flush input (inserts NOP) -->
+<line x1="385" y1="152" x2="385" y2="175" stroke="#e8b84a" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#a-y)"/>
+<text x="395" y="141" class="signal-ctrl">flush (NOP)</text>
+
+<!-- Signals stored in IF/EX -->
+<text x="365" y="260" fill="#ddd" class="pipe-reg-signal" text-anchor="middle">pc[31:0]</text>
+<line x1="330" y1="267" x2="400" y2="267" stroke="#444" stroke-width="0.5"/>
+<text x="365" y="300" fill="#ddd" class="pipe-reg-signal" text-anchor="middle">instr[31:0]</text>
+
+<!-- PC to IF/EX -->
+<line x1="270" y1="258" x2="320" y2="258" stroke="#6eb5ff" stroke-width="1.2" marker-end="url(#a)"/>
+<text x="292" y="252" class="signal-data">pc</text>
+
+<!-- instr_data to IF/EX -->
+<path d="M195,480 L195,450 L312,450 L312,295 L320,295" fill="none" stroke="#6eb5ff" stroke-width="1.2" marker-end="url(#a)"/>
+<text x="292" y="290" class="signal-data">instr</text>
+
+<!-- IF/EX outputs to Execute (pc) -->
+<line x1="410" y1="258" x2="440" y2="258" stroke="#6eb5ff" stroke-width="1.2" marker-end="url(#a)"/>
+<text x="422" y="252" class="signal-data">pc</text>
+
+<!-- IF/EX outputs to Execute (instr) -->
+<line x1="410" y1="295" x2="440" y2="295" stroke="#6eb5ff" stroke-width="1.2" marker-end="url(#a)"/>
+<text x="418" y="290" class="signal-data">instr</text>
+
+<!-- ============================================================ -->
+<!-- STAGE 2: EXECUTE (Decode + Execute)                           -->
+<!-- ============================================================ -->
+<rect x="440" y="140" width="370" height="530" rx="8" fill="#14141f" stroke="#6eb5ff" stroke-width="1.5"/>
+<text x="625" y="165" fill="#6eb5ff" class="stage-label" text-anchor="middle">DECODE + EXECUTE (Stage 2)</text>
+
+<!-- DECODER -->
+<rect x="460" y="228" width="140" height="120" rx="5" fill="#1a1a2a" stroke="#666" stroke-width="1"/>
+<text x="530" y="248" fill="#fff" class="box-title" text-anchor="middle">Decoder</text>
+<text x="530" y="263" class="box-detail" text-anchor="middle">rs1[4:0]  rs2[4:0]</text>
+<text x="530" y="276" class="box-detail" text-anchor="middle">rd[4:0]  imm[31:0]</text>
+<text x="530" y="289" class="box-detail" text-anchor="middle">alu_op[3:0]</text>
+<text x="530" y="306" class="box-detail" text-anchor="middle">(reg_write, mem_read,</text>
+<text x="530" y="318" class="box-detail" text-anchor="middle">mem_write, branch, jump,</text>
+<text x="530" y="330" class="box-detail" text-anchor="middle">lui, auipc)</text>
+
+<!-- instr to Decoder -->
+<line x1="440" y1="295" x2="460" y2="285" stroke="#6eb5ff" stroke-width="1.2" marker-end="url(#a)"/>
+
+<!-- IMMEDIATE GENERATOR -->
+<rect x="620" y="228" width="100" height="36" rx="4" fill="#1a1a2a" stroke="#666" stroke-width="0.8"/>
+<text x="670" y="244" fill="#ddd" font-size="10" text-anchor="middle">Immediate</text>
+<text x="670" y="257" fill="#ddd" font-size="10" text-anchor="middle">Generator</text>
+
+<!-- Decoder to Imm Gen -->
+<line x1="600" y1="248" x2="620" y2="248" stroke="#6eb5ff" stroke-width="1" marker-end="url(#a)"/>
+
+<!-- REGISTER FILE -->
+<rect x="460" y="392" width="140" height="95" rx="5" fill="#1a1a2a" stroke="#666" stroke-width="1"/>
+<text x="530" y="414" fill="#fff" class="box-title" text-anchor="middle">Register File</text>
+<text x="530" y="430" class="box-detail" text-anchor="middle">32 x 32-bit registers</text>
+<text x="530" y="444" class="box-detail" text-anchor="middle">2 read ports (rs1, rs2)</text>
+<text x="530" y="458" class="box-detail" text-anchor="middle">1 write port (rd)</text>
+<text x="530" y="472" class="box-detail" text-anchor="middle">x0 hardwired to 0</text>
+
+<!-- Decoder to RegFile (rs1, rs2 addresses) -->
+<line x1="505" y1="348" x2="505" y2="392" stroke="#6eb5ff" stroke-width="1.2" marker-end="url(#a)"/>
+<text x="468" y="374" class="signal-data">rs1, rs2</text>
+<line x1="555" y1="348" x2="555" y2="392" stroke="#6eb5ff" stroke-width="1.2" marker-end="url(#a)"/>
+<text x="558" y="374" class="signal-data">addrs</text>
+
+<!-- ALU_SRC MUX (trapezoid) -->
+<path d="M646,400 L676,412 L676,460 L646,472Z" fill="#1a1a2a" stroke="#6eb5ff" stroke-width="1"/>
+<text x="659" y="442" fill="#6eb5ff" font-size="8" text-anchor="middle">MUX</text>
+<text x="659" y="484" class="signal-ctrl" text-anchor="middle">alu_src</text>
+
+<!-- rs1_data to ALU A -->
+<path d="M600,422 L625,422 L625,412 L700,412" fill="none" stroke="#6eb5ff" stroke-width="1.2" marker-end="url(#a)"/>
+<text x="615" y="416" class="signal-data">rs1_data</text>
+
+<!-- rs2_data to ALU_SRC MUX -->
+<line x1="600" y1="452" x2="646" y2="452" stroke="#6eb5ff" stroke-width="1" marker-end="url(#a)"/>
+<text x="605" y="466" class="signal-data">rs2_data</text>
+
+<!-- imm to ALU_SRC MUX -->
+<line x1="670" y1="264" x2="670" y2="400" stroke="#6eb5ff" stroke-width="1" marker-end="url(#a)"/>
+<text x="675" y="340" class="signal-data">imm[31:0]</text>
+
+<!-- ALU_SRC MUX to ALU B -->
+<line x1="676" y1="436" x2="700" y2="436" stroke="#6eb5ff" stroke-width="1.2" marker-end="url(#a)"/>
+
+<!-- ALU -->
+<rect x="700" y="400" width="88" height="55" rx="5" fill="#1a1a2a" stroke="#6eb5ff" stroke-width="1.2"/>
+<text x="744" y="426" fill="#fff" class="box-title" text-anchor="middle">ALU</text>
+<text x="744" y="442" class="box-detail" text-anchor="middle">alu_op[3:0]</text>
+
+<!-- alu_op from decoder (control dashed) -->
+<path d="M600,310 L744,310 L744,400" fill="none" stroke="#e8b84a" stroke-width="0.8" stroke-dasharray="4,3" marker-end="url(#a-y)"/>
+<text x="666" y="305" class="signal-ctrl">alu_op</text>
+
+<!-- ALU result output -->
+<line x1="788" y1="424" x2="810" y2="424" stroke="#6eb5ff" stroke-width="1.5"/>
+
+<!-- ALU zero flag to branch logic -->
+<path d="M744,455 L744,502 L740,502" fill="none" stroke="#6eb5ff" stroke-width="0.8" marker-end="url(#a)"/>
+<text x="750" y="488" class="signal-data">zero flag</text>
+
+<!-- BRANCH LOGIC -->
+<rect x="610" y="522" width="140" height="55" rx="5" fill="#1a1a2a" stroke="#f06868" stroke-width="1"/>
+<text x="680" y="542" fill="#f06868" class="box-title" text-anchor="middle">Branch Logic</text>
+<text x="680" y="556" class="box-detail" text-anchor="middle">compare rs1, rs2</text>
+<text x="680" y="570" class="box-detail" text-anchor="middle">target = pc + imm</text>
+
+<!-- control signals + zero to branch logic -->
+<text x="758" y="514" class="signal-ctrl">control signals</text>
+<text x="758" y="526" class="signal-data">zero flag</text>
+
+<!-- pc to branch logic (dotted) -->
+<path d="M440,258 L452,258 L452,552 L610,552" fill="none" stroke="#6eb5ff" stroke-width="0.8" stroke-dasharray="3,2"/>
+<text x="458" y="548" class="signal-data">pc</text>
+
+<!-- Branch outputs (backward to Fetch) -->
+<text x="470" y="602" class="signal-back">branch_target[31:0] &#x2192; back to Fetch PC mux</text>
+<path d="M610,560 L470,560 L470,596" fill="none" stroke="#f06868" stroke-width="1.2"/>
+<text x="470" y="622" class="signal-back">pc_sel &#x2192; back to Fetch PC mux</text>
+
+<!-- rs2_data passthrough for stores -->
+<text x="470" y="508" fill="#888" font-size="8">rs2_data[31:0] (pass-through for stores)</text>
+
+<!-- Decoder control signals pass-through -->
+<text x="720" y="472" class="signal-ctrl">control signals &#x2192;</text>
+
+<!-- ============================================================ -->
+<!-- PIPELINE REGISTER: EX/MW                                      -->
+<!-- ============================================================ -->
+<rect x="830" y="175" width="110" height="445" rx="5" fill="#1c1820" stroke="#e0913a" stroke-width="1.5"/>
+<text x="885" y="198" fill="#e0913a" class="pipe-reg-label" text-anchor="middle">EX / MW</text>
+<text x="885" y="212" fill="#e0913a" font-size="10" text-anchor="middle">Register</text>
+
+<!-- Data stall inserts NOP bubble here -->
+<line x1="885" y1="152" x2="885" y2="175" stroke="#e8b84a" stroke-width="1.2" marker-end="url(#a-y)"/>
+<text x="885" y="141" class="signal-ctrl" text-anchor="middle">stall &#x2192; NOP bubble</text>
+
+<!-- Signals stored -->
+<text x="885" y="250" fill="#ddd" class="pipe-reg-signal" text-anchor="middle">alu_result[31:0]</text>
+<line x1="840" y1="256" x2="930" y2="256" stroke="#444" stroke-width="0.5"/>
+<text x="885" y="276" fill="#ddd" class="pipe-reg-signal" text-anchor="middle">rs2_data[31:0]</text>
+<line x1="840" y1="282" x2="930" y2="282" stroke="#444" stroke-width="0.5"/>
+<text x="885" y="302" fill="#ddd" class="pipe-reg-signal" text-anchor="middle">rd[4:0]</text>
+<line x1="840" y1="308" x2="930" y2="308" stroke="#444" stroke-width="0.5"/>
+<text x="885" y="328" fill="#ddd" class="pipe-reg-signal" text-anchor="middle">pc_plus4[31:0]</text>
+<line x1="840" y1="334" x2="930" y2="334" stroke="#444" stroke-width="0.5"/>
+
+<!-- Control signals in EX/MW -->
+<text x="885" y="362" class="pipe-reg-ctrl" text-anchor="middle">reg_write</text>
+<text x="885" y="378" class="pipe-reg-ctrl" text-anchor="middle">mem_read</text>
+<text x="885" y="394" class="pipe-reg-ctrl" text-anchor="middle">mem_write</text>
+<text x="885" y="410" class="pipe-reg-ctrl" text-anchor="middle">mem_to_reg</text>
+<text x="885" y="426" class="pipe-reg-ctrl" text-anchor="middle">wb_we</text>
+<text x="885" y="442" class="pipe-reg-ctrl" text-anchor="middle">wb_sel[3:0]</text>
+
+<!-- ALU result to EX/MW -->
+<path d="M810,424 L815,424 L815,246 L830,246" fill="none" stroke="#6eb5ff" stroke-width="1.2" marker-end="url(#a)"/>
+
+<!-- EX/MW outputs to Mem/WB stage -->
+<line x1="940" y1="246" x2="970" y2="246" stroke="#6eb5ff" stroke-width="1.2" marker-end="url(#a)"/>
+<text x="944" y="240" class="signal-data">alu_result</text>
+<line x1="940" y1="272" x2="970" y2="272" stroke="#6eb5ff" stroke-width="1.2" marker-end="url(#a)"/>
+<text x="944" y="266" class="signal-data">rs2_data</text>
+<line x1="940" y1="298" x2="970" y2="298" stroke="#6eb5ff" stroke-width="1.2" marker-end="url(#a)"/>
+<text x="944" y="292" class="signal-data">rd</text>
+<line x1="940" y1="324" x2="970" y2="324" stroke="#6eb5ff" stroke-width="1.2" marker-end="url(#a)"/>
+<text x="944" y="318" class="signal-data">pc_plus4</text>
+
+<!-- ============================================================ -->
+<!-- STAGE 3: MEM / WRITEBACK                                      -->
+<!-- ============================================================ -->
+<rect x="970" y="140" width="310" height="500" rx="8" fill="#14141f" stroke="#6eb5ff" stroke-width="1.5"/>
+<text x="1125" y="165" fill="#6eb5ff" class="stage-label" text-anchor="middle">MEM / WRITEBACK (Stage 3)</text>
+
+<!-- Wishbone Data Bus Interface -->
+<rect x="990" y="370" width="135" height="80" rx="5" fill="#1a1a2a" stroke="#5cc870" stroke-width="1.2"/>
+<text x="1058" y="392" fill="#5cc870" class="box-title" text-anchor="middle">Wishbone</text>
+<text x="1058" y="406" fill="#5cc870" font-size="10" text-anchor="middle">Data Bus</text>
+<text x="1058" y="422" class="box-detail" text-anchor="middle">addr = alu_result</text>
+<text x="1058" y="436" class="box-detail" text-anchor="middle">write_data = rs2_data</text>
+
+<!-- alu_result to Wishbone address -->
+<path d="M990,246 L990,370" fill="none" stroke="#6eb5ff" stroke-width="1.2" marker-end="url(#a)"/>
+<text x="994" y="320" class="signal-data">alu_result</text>
+<text x="994" y="332" fill="#888" font-size="8">(as address)</text>
+
+<!-- rs2_data to Wishbone write data -->
+<path d="M1000,272 L1010,272 L1010,370" fill="none" stroke="#6eb5ff" stroke-width="0.8"/>
+
+<!-- Wishbone to external bus (downward) -->
+<line x1="1040" y1="450" x2="1040" y2="510" stroke="#5cc870" stroke-width="1.2" marker-end="url(#a-g)"/>
+<text x="998" y="480" class="signal-bus">wb_addr, wb_dat_m2s</text>
+<text x="998" y="493" class="signal-bus">wb_cyc, wb_stb, wb_we</text>
+
+<!-- Wishbone from external bus (upward) -->
+<line x1="1080" y1="510" x2="1080" y2="450" stroke="#5cc870" stroke-width="1.2" marker-end="url(#a-g)"/>
+<text x="1086" y="488" class="signal-bus">wb_dat_s2m</text>
+<text x="1086" y="501" class="signal-bus">wb_ack</text>
+
+<!-- Wishbone Interconnect label -->
+<rect x="1000" y="515" width="135" height="24" rx="4" fill="#0d2a0d" stroke="#5cc870" stroke-width="0.8"/>
+<text x="1068" y="531" fill="#5cc870" font-size="9" text-anchor="middle">To Wishbone Interconnect</text>
+
+<!-- RESULT MUX (trapezoid) -->
+<path d="M1160,230 L1200,248 L1200,325 L1160,343Z" fill="#1a1a2a" stroke="#6eb5ff" stroke-width="1.2"/>
+<text x="1178" y="290" fill="#6eb5ff" font-size="9" text-anchor="middle">MUX</text>
+
+<!-- alu_result to Result MUX input -->
+<path d="M990,246 L1040,246 L1040,250 L1160,250" fill="none" stroke="#6eb5ff" stroke-width="1" marker-end="url(#a)"/>
+<text x="1080" y="244" class="signal-data">alu_result</text>
+
+<!-- mem_data to Result MUX input -->
+<path d="M1125,410 L1148,410 L1148,290 L1160,290" fill="none" stroke="#6eb5ff" stroke-width="1" marker-end="url(#a)"/>
+<text x="1130" y="356" class="signal-data">mem_data</text>
+
+<!-- pc_plus4 to Result MUX input -->
+<path d="M990,324 L1070,324 L1070,330 L1160,330" fill="none" stroke="#6eb5ff" stroke-width="1" marker-end="url(#a)"/>
+<text x="1080" y="338" class="signal-data">pc_plus4</text>
+
+<!-- mem_to_reg select -->
+<text x="1178" y="358" class="signal-ctrl" text-anchor="middle">mem_to_reg</text>
+
+<!-- Result MUX to rd_data output -->
+<line x1="1200" y1="286" x2="1244" y2="286" stroke="#6eb5ff" stroke-width="2" marker-end="url(#a)"/>
+<text x="1210" y="278" fill="#fff" font-size="10" font-weight="600">rd_data</text>
+<text x="1210" y="300" fill="#999" font-size="8">[31:0]</text>
+
+<!-- ============================================================ -->
+<!-- WRITEBACK PATH (backward loop)                                -->
+<!-- ============================================================ -->
+<path d="M1244,286 L1260,286 L1260,830 L530,830 L530,487"
+      fill="none" stroke="#f06868" stroke-width="1.8" marker-end="url(#a-r)"/>
+<text x="860" y="824" fill="#f06868" font-size="10">Writeback: rd_data[31:0] + rd_addr[4:0] + reg_write &#x2192; Register File write port</text>
+
+<!-- rd address also goes back (dashed) -->
+<path d="M990,298 L1252,298 L1252,822" fill="none" stroke="#f06868" stroke-width="0.8" stroke-dasharray="4,3"/>
+
+<!-- ============================================================ -->
+<!-- HAZARD DETECTION UNIT                                         -->
+<!-- ============================================================ -->
+<rect x="530" y="740" width="280" height="66" rx="5" fill="#201818" stroke="#e8b84a" stroke-width="1.5"/>
+<text x="670" y="762" fill="#e8b84a" font-size="11" font-weight="600" text-anchor="middle">Hazard Detection Unit</text>
+<text x="670" y="778" class="box-detail" text-anchor="middle">Compares EX-stage rd against decode-stage rs1/rs2</text>
+<text x="670" y="792" class="box-detail" text-anchor="middle">Issues stall (data hazard) or flush (branch taken)</text>
+
+<!-- DATA STALL path 1: freeze PC + IF/EX register -->
+<path d="M565,740 L565,716 L345,716 L345,595" fill="none" stroke="#e8b84a" stroke-width="1.2" marker-end="url(#a-y)"/>
+<text x="360" y="712" class="signal-ctrl">data stall &#x2192; freeze IF/EX + PC</text>
+
+<!-- DATA STALL path 2: NOP bubble into EX/MW register -->
+<path d="M620,740 L620,700 L885,700 L885,620" fill="none" stroke="#e8b84a" stroke-width="1.2" marker-end="url(#a-y)"/>
+<text x="720" y="696" class="signal-ctrl">data stall &#x2192; NOP bubble into EX/MW</text>
+
+<!-- BRANCH FLUSH: NOP the wrongly-fetched instr in IF/EX -->
+<path d="M775,740 L775,726 L385,726 L385,595" fill="none" stroke="#e8b84a" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#a-y)"/>
+<text x="490" y="732" class="signal-ctrl">branch flush &#x2192; NOP into IF/EX</text>
+
+<!-- Inputs label -->
+<text x="536" y="818" fill="#888" font-size="8">Inputs: ex_rd, ex_reg_write, decode_rs1, decode_rs2, branch_taken</text>
+
+<!-- ============================================================ -->
+<!-- ANNOTATION BOXES                                              -->
+<!-- ============================================================ -->
+<!-- Pipeline Timing -->
+<rect x="1300" y="140" width="148" height="165" rx="5" fill="#181824" stroke="#444" stroke-width="0.8"/>
+<text x="1310" y="160" class="note-title" fill="#ccc">Pipeline timing</text>
+<text x="1310" y="178" class="note-body">Cycle 1: Fetch</text>
+<text x="1310" y="194" class="note-body">Cycle 2: Decode + Execute</text>
+<text x="1310" y="210" class="note-body">Cycle 3: Memory + Writeback</text>
+<text x="1310" y="230" class="note-body">After fill: 1 instr/cycle</text>
+<text x="1310" y="252" class="signal-ctrl">Data stall:</text>
+<text x="1310" y="266" class="note-body">  Freeze PC + IF/EX reg</text>
+<text x="1310" y="280" class="note-body">  NOP bubble &#x2192; EX/MW reg</text>
+<text x="1310" y="298" class="signal-ctrl">Branch flush:</text>
+<text x="1310" y="312" class="note-body">  NOP &#x2192; IF/EX (kill bad fetch)</text>
+
+<!-- Exits CPU Box -->
+<rect x="1300" y="320" width="148" height="80" rx="5" fill="#181824" stroke="#5cc870" stroke-width="0.8"/>
+<text x="1310" y="340" class="note-title" fill="#5cc870">Exits CPU</text>
+<text x="1310" y="358" class="note-body">Instr fetch (Fetch stage)</text>
+<text x="1310" y="374" class="note-body">Data LD/ST (MW stage)</text>
+<text x="1310" y="390" class="note-body">Both via Wishbone master</text>
+
+</svg>
+</body>
+</html>

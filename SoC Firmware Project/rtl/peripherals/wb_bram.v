@@ -21,8 +21,6 @@ module wb_bram (
 );
 
 // Two separate single-port BRAMs avoid Gowin's unsupported DPB WRITE_MODE0=10.
-// Both memories boot from the same firmware image so instruction fetches and
-// data reads see the same initial contents.
 reg [31:0] mem_i [0:8191];
 reg [31:0] mem_d [0:8191];
 integer i;
@@ -100,13 +98,11 @@ always @(posedge clk) begin
     end else begin
         if (wb_cyc && wb_stb) begin
             if (wb_we) begin
-                // Write
                 if (wb_sel[0]) mem_d[wb_addr[14:2]][7:0] <= wb_dat_m2s[7:0];
                 if (wb_sel[1]) mem_d[wb_addr[14:2]][15:8] <= wb_dat_m2s[15:8];
                 if (wb_sel[2]) mem_d[wb_addr[14:2]][23:16] <= wb_dat_m2s[23:16];
                 if (wb_sel[3]) mem_d[wb_addr[14:2]][31:24] <= wb_dat_m2s[31:24];
             end else begin
-                // Read
                 wb_dat_s2m <= mem_d[wb_addr[14:2]];
             end
             wb_ack <= 1;
