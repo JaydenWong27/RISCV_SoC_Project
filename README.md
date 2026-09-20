@@ -2,8 +2,6 @@
 
 A fully functional 32 bit RISCV (RV32I) System-on-Chip implemented in Verilog, targeting the MicroPhase A7-Lite FPGA development board (AMD/Xilinx Artix-7 XC7A100T-2FTG256). The CPU executes real bare-metal C firmware and blinks the onboard LEDs.
 
-> **Pin assignments are partial.** `clk` (N11), `rst` (T13) and LED1 (P11) are verified; `uart_tx`, `uart_rx`, LED2 and `pwm_out` are still TODO in `SoC Firmware Project/vivado/a7lite.xdc`. Build `soc_top_bringup` for a flashable bitstream from just those three pins - see [the Vivado README](SoC%20Firmware%20Project/vivado/README.md).
-
 ## What this is
 
 This project is a from-scratch RISC-V processor and SoC built entirely in synthesizable Verilog. It includes:
