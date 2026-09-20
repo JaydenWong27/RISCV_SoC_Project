@@ -1,4 +1,4 @@
-*.pyc
+﻿*.pyc
 .pytest_cache/
 
 SoC Firmware Project/SoC Firmware Project.gprj.user
@@ -13,11 +13,19 @@ SoC Firmware Project/impl/
 SoC Firmware Project/firmware/firmware.bin
 SoC Firmware Project/firmware/firmware.elf
 
-# Claude Code internal files
-.claude/
 
 # Private documents
 RISCV_SoC_Project_Guide_Tang_Nano_20K.docx
 risc_v_soc_source_of_truth.docx
 cpu_pipeline_diagram.html
 cpu_pipeline_diagram_1.html
+
+# Vivado build outputs
+SoC Firmware Project/vivado/build/
+SoC Firmware Project/sim/firmware.hex
+SoC Firmware Project/sim/results_*.xml
+
+# Vivado run journals
+vivado*.jou
+vivado*.log
+.Xil/

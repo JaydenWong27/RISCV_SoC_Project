@@ -1,4 +1,9 @@
-module soc_top (
+module soc_top #(
+    // MicroPhase A7-Lite: 50 MHz on-board oscillator.
+    parameter integer CLK_FREQ_HZ = 50_000_000,
+    parameter integer BAUD_RATE   = 115200,
+    parameter INIT_FILE = "firmware.hex"
+) (
     input wire clk,
     input wire rst,      // active-low button (pulled high; press to reset)
     output wire uart_tx,
@@ -7,9 +12,16 @@ module soc_top (
     output wire pwm_out
 );
 
+// The reset button is asynchronous to clk, so synchronize it before it
+// reaches any logic.
+reg [1:0] rst_sync;
+always @(posedge clk)
+    rst_sync <= {rst_sync[0], rst};
+wire rst_n = rst_sync[1];
+
 reg [7:0] por_count;
 always @(posedge clk) begin
-    if (!rst)
+    if (!rst_n)
         por_count <= 0;
     else if (!por_count[7])
         por_count <= por_count + 1;
@@ -137,7 +149,9 @@ wb_interconnect bus_fabric(
     .timer_ack(timer_wb_ack)
 );
 
-wb_bram bram(
+wb_bram #(
+    .INIT_FILE(INIT_FILE)
+) bram(
     .clk(clk),
     .rst(rst_internal),
     // Port A: instruction fetch (read-only, always active)
@@ -155,7 +169,10 @@ wb_bram bram(
     .wb_ack(bram_wb_ack)
 );
 
-wb_uart uart(
+wb_uart #(
+    .CLK_FREQ_HZ(CLK_FREQ_HZ),
+    .BAUD_RATE(BAUD_RATE)
+) uart(
     .clk(clk),
     .rst(rst_internal),
     .wb_addr(cpu_wb_addr),
@@ -171,7 +188,9 @@ wb_uart uart(
 );
 
 wb_gpio #(
-    .ACTIVE_LOW_MASK(8'h3F)
+        // A7-Lite LEDs assumed active-high. If they come up inverted,
+    // set this to 8'h03.
+    .ACTIVE_LOW_MASK(8'h00)
 ) gpio(
     .clk(clk),
     .rst(rst_internal),

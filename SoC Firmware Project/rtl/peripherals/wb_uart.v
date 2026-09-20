@@ -1,4 +1,7 @@
-module wb_uart (
+module wb_uart #(
+    parameter integer CLK_FREQ_HZ = 50_000_000,
+    parameter integer BAUD_RATE   = 115200
+) (
     input wire clk,
     input wire rst,
     input wire [31:0] wb_addr,
@@ -16,9 +19,15 @@ module wb_uart (
 
 );
 
+    // Cycles per bit. At 50 MHz / 115200 this is 434, which no longer fits in
+    // the 8-bit counters the 27 MHz version used (divisor 234).
+    localparam integer BAUD_DIV  = CLK_FREQ_HZ / BAUD_RATE;
+    localparam integer BAUD_HALF = BAUD_DIV / 2;
+    localparam integer BAUD_W    = $clog2(BAUD_DIV + 1);
+
     reg [7:0] tx_reg;
     reg tx_busy;
-    reg [7:0] baud_counter;
+    reg [BAUD_W-1:0] baud_counter;
     reg [9:0] tx_shift;
     reg [9:0] bit_count;
 
@@ -38,7 +47,7 @@ module wb_uart (
             bit_count <= 10'b0000000000;
         end else if(tx_busy) begin
             baud_counter <= baud_counter + 1;
-            if(baud_counter == 8'b11101010 ) begin
+            if(baud_counter == (BAUD_DIV - 1)) begin
                 baud_counter <= 0;
                 uart_tx <= tx_shift[0];
                 tx_shift <= tx_shift >> 1;
@@ -51,7 +60,7 @@ module wb_uart (
     end
 
     reg rx_active;
-    reg [7:0] rx_baud_counter;
+    reg [BAUD_W-1:0] rx_baud_counter;
     reg [9:0] rx_bit_count;
     reg [7:0] rx_shift;
     reg [7:0] rx_data;
@@ -66,7 +75,7 @@ module wb_uart (
             rx_data <= 0;
             rx_ready <= 0;
         end else if(rx_active) begin
-            if(rx_baud_counter == 234) begin
+            if(rx_baud_counter == (BAUD_DIV - 1)) begin
                 rx_baud_counter <= 0;
                 rx_shift <= {uart_rx, rx_shift[7:1]};
                 rx_bit_count <= rx_bit_count + 1;
@@ -84,7 +93,8 @@ module wb_uart (
         end else begin
             if(uart_rx == 0) begin
                 rx_active <= 1;
-                rx_baud_counter <= 117;
+                // Start half a bit in so later bits are sampled mid-cell.
+                rx_baud_counter <= BAUD_HALF;
                 rx_bit_count <= 0;
 
             end

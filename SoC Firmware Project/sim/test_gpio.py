@@ -2,6 +2,16 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, FallingEdge
 
+def pin(dut, i):
+    """Read one gpio bit as a string.
+
+    gpio_pins is a tristate bus: bits whose direction is 'input' sit at 'z',
+    and cocotb refuses to convert a LogicArray containing non-0/1 values to
+    int. Index the single bit instead of converting the whole bus.
+    """
+    return str(dut.gpio_pins.value[i])
+
+
 async def tick(dut):
     await RisingEdge(dut.clk)
     await FallingEdge(dut.clk)
@@ -14,6 +24,9 @@ async def reset(dut):
     dut.wb_we.value = 0
     dut.wb_addr.value = 0
     dut.wb_dat_m2s.value = 0
+    # wb_gpio gates register writes on the byte enables; leaving wb_sel
+    # undriven means no write ever lands and the pins stay tristated.
+    dut.wb_sel.value = 0xF
     await tick(dut)
     await tick(dut)
     dut.rst.value = 0
@@ -41,7 +54,7 @@ async def test_output_pin(dut):
 
     await tick(dut)
 
-    assert (int(dut.gpio_pins.value) & 0x01) == 1
+    assert pin(dut, 0) == '1', f"gpio_pins[0] = {pin(dut, 0)}, expected '1'"
 
 
 

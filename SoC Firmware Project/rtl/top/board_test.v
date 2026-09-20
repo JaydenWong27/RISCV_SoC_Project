@@ -1,6 +1,13 @@
 // Minimal board test — no CPU, just blinks LEDs and sends "Hi\n" on UART
-// Use this to verify pin assignments and synthesis are correct
-module soc_top (
+// Use this to verify pin assignments and synthesis are correct.
+//
+// This deliberately reuses the name soc_top so it drops into the same XDC.
+// To build it, swap rtl/top/soc_top.v for this file in vivado/build.tcl --
+// never read both, they collide.
+module soc_top #(
+    parameter integer CLK_FREQ_HZ = 50_000_000,
+    parameter integer BAUD_RATE   = 115200
+) (
     input wire clk,
     input wire rst,
     output reg uart_tx,
@@ -11,14 +18,13 @@ module soc_top (
 
 assign pwm_out = 0;
 
-// --- LED blink (active-low: 0 = ON) ---
-reg [23:0] counter;
+// --- LED blink ---
+reg [24:0] counter;
 always @(posedge clk) counter <= counter + 1;
 
-// Blink LED 0 at ~1.6 Hz (27MHz / 2^24)
-// Active-low: drive 0 to turn on, 1 to turn off
-assign gpio_pins[0] = counter[23];  // LED 0 blinks
-assign gpio_pins[1] = ~counter[23]; // LED 1 blinks opposite
+// Blink LED 0 at ~1.5 Hz (50 MHz / 2^25)
+assign gpio_pins[0] = counter[24];  // LED 0 blinks
+assign gpio_pins[1] = ~counter[24]; // LED 1 blinks opposite
 assign gpio_pins[2] = 1'bz;
 assign gpio_pins[3] = 1'bz;
 assign gpio_pins[4] = 1'bz;
@@ -27,10 +33,11 @@ assign gpio_pins[6] = 1'bz;
 assign gpio_pins[7] = 1'bz;
 
 // --- UART TX: send "Hi!\n" once, then idle ---
-// 27MHz / 234 = 115384 baud (~115200)
-localparam BAUD_DIV = 234;
+// 50 MHz / 434 = 115207 baud (~115200)
+localparam integer BAUD_DIV = CLK_FREQ_HZ / BAUD_RATE;
+localparam integer BAUD_W   = $clog2(BAUD_DIV + 1);
 
-reg [7:0] baud_cnt;
+reg [BAUD_W-1:0] baud_cnt;
 reg [3:0] bit_idx;
 reg [9:0] shift_reg;
 reg tx_busy;
@@ -67,7 +74,7 @@ always @(posedge clk) begin
         bit_idx <= 0;
         baud_cnt <= 0;
     end else if (tx_busy) begin
-        if (baud_cnt == BAUD_DIV) begin
+        if (baud_cnt == (BAUD_DIV - 1)) begin
             baud_cnt <= 0;
             uart_tx <= shift_reg[0];
             shift_reg <= shift_reg >> 1;

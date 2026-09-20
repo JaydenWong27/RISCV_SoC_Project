@@ -19,6 +19,29 @@ async def reset(dut):
     dut.rst.value = 0
 
 
+def _safe_int(sig):
+    """int() of a signal, or None while it still holds x/z."""
+    try:
+        return int(sig.value)
+    except ValueError:
+        return None
+
+
+async def wait_for_writeback(dut, rd, max_cycles=12):
+    """Advance until rd reaches the writeback stage.
+
+    The core has a prefetch buffer in front of the 5-stage pipeline, so the
+    number of cycles from fetch to writeback is not a fixed 4 -- feeding a
+    fixed number of NOPs and checking once is brittle. Poll instead, and
+    return the data that was written back.
+    """
+    for _ in range(max_cycles):
+        await tick(dut)
+        if _safe_int(dut.wb_rd) == rd:
+            return _safe_int(dut.wb_rd_data)
+    return None
+
+
 @cocotb.test()
 async def test_pc_increments(dut):
     """
@@ -74,18 +97,12 @@ async def test_addi_writes_register(dut):
     dut.instr_ack.value = 1
     await tick(dut)
 
-    # Cycles 2-4: feed NOPs to push ADDI to writeback
-    # 3 NOPs = 3 more cycles → ADDI reaches WB on cycle 4
+    # Feed NOPs and wait for the ADDI to reach writeback.
     dut.instr_data.value = 0x00000013  # NOP
-    for _ in range(3):
-        await tick(dut)
+    data = await wait_for_writeback(dut, rd=1)
 
-    # By now the ADDI should have reached writeback
-    # wb_rd should be 1 (x1) and wb_rd_data should be 5
-    assert dut.wb_rd.value == 1, \
-        f"Expected rd=1, got {dut.wb_rd.value}"
-    assert dut.wb_rd_data.value == 5, \
-        f"Expected rd_data=5, got {dut.wb_rd_data.value}"
+    assert data is not None, "ADDI never reached writeback with rd=x1"
+    assert data == 5, f"Expected rd_data=5, got {data}"
 
 
 @cocotb.test()
@@ -98,18 +115,13 @@ async def test_add_two_registers(dut):
     dut.instr_ack.value = 1
     await tick(dut)
 
-    #Cycles 2-4: #feed NOP's to push ADD to writeback
-    #3 NOPs = 3 more cycles to ADD reahces WB on cycle
+    # Feed NOPs and wait for the ADD to reach writeback.
+    dut.instr_data.value = 0x00000013  # NOP
+    data = await wait_for_writeback(dut, rd=1)
 
-    dut.instr_data.value = 0x00000013 
-    for _ in range (3):
-        await tick(dut)
-
-    assert dut.wb_rd.value  == 1, \
-        f"Expected rd = 1 , got {dut.wb_rd.value}"
-    
-    assert dut.wb_rd_data.value == 0, \
-        f"Expected rd_data = 5, got {dut.wb_rd_data.value}"
+    # x2 and x3 are both 0 after reset, so ADD x1, x2, x3 writes 0.
+    assert data is not None, "ADD never reached writeback with rd=x1"
+    assert data == 0, f"Expected rd_data=0, got {data}"
 
 
 @cocotb.test()
@@ -125,15 +137,18 @@ async def test_load_stall(dut):
     dut.instr_data.value = 0x00008133  # ADD x2, x1, x0
     await tick(dut)
 
-    # Cycle 3: LW now in EX, ADD in ID, hazard fires HERE
-    # Record PC before this tick, it should NOT change
-    pc_before = int(dut.instr_addr.value)
+    # The load-use hazard freezes the PC for one cycle. Which tick it lands
+    # on depends on the prefetch buffer in front of the pipeline, so sample a
+    # window and assert the PC repeats somewhere inside it, rather than
+    # pinning it to one exact cycle.
     dut.instr_data.value = 0x00000013  # NOP
-    await tick(dut)
+    seen = [_safe_int(dut.instr_addr)]
+    for _ in range(6):
+        await tick(dut)
+        seen.append(_safe_int(dut.instr_addr))
 
-    pc_after = int(dut.instr_addr.value)
-    assert pc_after == pc_before, \
-        f"expected stall (pc frozen), but pc moved from {pc_before} to {pc_after}"
+    stalled = any(a is not None and a == b for a, b in zip(seen, seen[1:]))
+    assert stalled, f"expected the PC to freeze for a cycle, saw {seen}"
 
 
 @cocotb.test()

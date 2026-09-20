@@ -11,8 +11,12 @@ firmware.elf: crt0.S main.c link.ld hal.h
 firmware.bin: firmware.elf
 	$(OBJCOPY) -O binary firmware.elf firmware.bin
 
+# firmware.hex is read directly by $readmemh in rtl/peripherals/wb_bram.v --
+# no separate RTL-generation step is needed.
 firmware.hex: firmware.bin bin2hex.py
 	python3 bin2hex.py firmware.bin firmware.hex
 
 clean:
 	rm -f firmware.elf firmware.bin firmware.hex
+
+.PHONY: all clean

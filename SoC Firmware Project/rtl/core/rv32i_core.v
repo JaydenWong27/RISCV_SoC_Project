@@ -5,6 +5,8 @@ module rv32i_core (
     input wire instr_ack,
     input wire [31:0] wb_dat_s2m,
     input wire wb_ack,
+    // Driven by wb_timer, but nothing consumes it: this core has no trap
+    // handling, mtvec or CSR file, so the timer is a polled peripheral.
     input wire timer_irq,
 
     output wire [31:0] instr_addr,

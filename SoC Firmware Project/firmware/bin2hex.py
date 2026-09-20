@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+"""Convert a flat firmware binary into the hex format $readmemh expects.
+
+Output is one 32-bit little-endian word per line, no address markers, which
+rtl/peripherals/wb_bram.v loads directly via $readmemh.
+"""
 
 import sys
 import struct
@@ -20,4 +25,4 @@ with open(output_file, 'w') as f:
             word += b'\x00' * (4 - len(word))
         # Little endian
         word_int = struct.unpack('<I', word)[0]
-        f.write(f"@{i//4:04X} {word_int:08X}\n")
+        f.write(f"{word_int:08X}\n")
