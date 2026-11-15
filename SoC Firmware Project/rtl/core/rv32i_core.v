@@ -43,6 +43,15 @@ wire alu_zero;
 reg [31:0] pc;
 reg [31:0] pc_prev;   
 reg flush_delay;       
+// FIX: during reset the BRAM is already reading address 0, and in the first cycle
+// after reset pc is still 0, so the word at address 0 comes out of the BRAM twice.
+// Keep the first copy and turn the second into a NOP, or instruction 0 runs twice.
+reg rst_q1, rst_q2;
+always @(posedge clk) begin
+    rst_q1 <= rst;
+    rst_q2 <= rst_q1;
+end
+wire fetch_dup = rst_q2 && !rst_q1;   // second cycle after reset
 
 //IF/ID pipeline register
 reg [31:0] if_id_instr; 
@@ -137,8 +146,8 @@ assign branch_condition = (id_ex_funct3 == 3'b000) ?  alu_zero : // BEQ
                           (id_ex_funct3 == 3'b111) ? !alu_result[0] : // BGEU
                           1'b0;
 
-wire branch_taken = id_ex_branch && branch_condition;
-wire jump_taken = id_ex_jump;
+wire branch_taken = id_ex_branch && branch_condition && !mem_stall; // FIX: wait out the memory stall
+wire jump_taken = id_ex_jump && !mem_stall; // FIX
 wire [31:0] jump_target = id_ex_jalr ? (alu_result & 32'hFFFFFFFE) : branch_target;
 
 assign hazard_branch_taken = branch_taken || jump_taken;
@@ -189,14 +198,18 @@ assign wb_rd = mem_wb_rd;
 assign wb_reg_write = mem_wb_reg_write;
 
 //Hazard input: connect pipeline stage signals to hazard unit
-assign hazard_ex_mw_rd = ex_mem_rd;
-assign hazard_ex_mw_reg_write = ex_mem_reg_write;
-assign hazard_ex_mw_mem_read = ex_mem_mem_read;
+// FIX: compare the instruction in ID against the load in EX (ID/EX), one ahead.
+assign hazard_ex_mw_rd = id_ex_rd;
+assign hazard_ex_mw_reg_write = id_ex_reg_write;
+assign hazard_ex_mw_mem_read = id_ex_mem_read;
 assign hazard_id_rs1 = decode_rs1;
 assign hazard_id_rs2 = decode_rs2;
 
 // Fetch signals to instruction memory
-assign instr_addr = pc;
+// FIX: during a stall, re-present last cycle's address so the BRAM output repeats.
+// Otherwise the word coming out of the BRAM in the stall cycle is never captured.
+wire [31:0] fetch_addr = pipeline_stall ? pc_prev : pc;
+assign instr_addr = fetch_addr;
 assign instr_cyc  = 1;
 assign instr_stb  = 1;
 
@@ -272,7 +285,7 @@ always @(posedge clk) begin
         mem_wait <= 0;
     end else begin
         flush_delay <= hazard_flush;
-        pc_prev <= pc;
+        pc_prev <= fetch_addr; // FIX: the address the BRAM actually saw
         mem_wait <= ex_mem_mem_read && !mem_wait;
         if (pipeline_stall)
             pc <= pc; // freeze if there is hazard or memory stall
@@ -290,6 +303,10 @@ always @(posedge clk) begin
         fetch_buf_instr <= 32'h00000013;
         fetch_buf_pc    <= 0;
         fetch_buf_valid <= 0;
+    end else if (fetch_dup) begin
+        fetch_buf_instr <= 32'h00000013;   // FIX: drop the duplicate of address 0
+        fetch_buf_pc    <= 0;
+        fetch_buf_valid <= 1;
     end else if (!pipeline_stall || !fetch_buf_valid) begin
         fetch_buf_instr <= instr_data;
         fetch_buf_pc    <= pc_prev;
@@ -330,6 +347,8 @@ always @(posedge clk) begin
         id_ex_jalr <= 0;
         id_ex_rs1 <= 0;
         id_ex_rs2 <= 0;
+    end else if (mem_stall) begin
+        // FIX: hold. EX/MEM is frozen, so overwriting ID/EX would delete this instruction.
     end else if (hazard_stall) begin
         id_ex_rs1_data <= 0;
         id_ex_rs2_data <= 0;

@@ -27,20 +27,22 @@ The design synthesizes and runs on real hardware using AMD Vivado. It runs direc
 | **Memory** | 32 KB unified instruction/data, true dual-port block RAM |
 | **Bus** | Wishbone B4 classic, 32-bit, single master, 5 slaves |
 
-### Post-route results (Vivado 2026.1, `soc_top`)
+### Post-route results (Vivado 2025.2, `soc_top`, after the stall-logic fixes)
 
 | Resource | Used | Available | Utilization |
 |---|---|---|---|
-| Slice LUTs | 1,702 | 63,400 | 2.68% |
-| Slice Registers | 1,818 | 126,800 | 1.43% |
+| Slice LUTs | 1,720 | 63,400 | 2.71% |
+| Slice Registers | 1,820 | 126,800 | 1.44% |
 | Block RAM (RAMB36E1) | 8 | 135 | 5.93% |
 | DSP48 | 0 | 240 | 0% |
 | Bonded IOB | 13 | 170 | 7.65% |
 | Global clock buffers | 1 | 32 | 3.13% |
 
-**Timing:** WNS **+5.214 ns** setup, WHS +0.092 ns hold, **0 failing endpoints** of 5,619.
-The critical path is 14.79 ns, so this implementation supports roughly **67 MHz** — 35%
-above the 50 MHz target. No DSPs and no LUTRAM: all storage lands in dedicated block RAM.
+**Timing:** WNS **+5.847 ns** setup, WHS +0.105 ns hold, **0 failing endpoints** of 5,653.
+20 ns minus 5.847 ns of slack leaves 14.15 ns, so this implementation supports roughly **70 MHz**,
+about 40% above the 50 MHz target. The worst path runs from `ex_mem_mem_read` (the memory
+stall) to the synchronous reset of the ID/EX registers (the bubble). Before the fixes it was
++5.214 ns / +0.092 ns. No DSPs and no LUTRAM: all storage lands in dedicated block RAM.
 
 ### Verification
 
@@ -48,12 +50,27 @@ above the 50 MHz target. No DSPs and no LUTRAM: all storage lands in dedicated b
 hardware bring-up on the board: the CPU boots from BRAM, executes bare-metal C, and
 drives the LED through the Wishbone bus and GPIO peripheral.
 
+**Random-program check against a Python reference model** (`python sim/cpu_check/cpu_check.py`):
+7 directed load and branch cases plus 1,000 random programs, compared register by register.
+The original core matched on only 155 of 1,000. That traced to five bugs in the stall logic,
+all of which the 83 unit tests missed:
+
+| # | Bug | Fix |
+|---|---|---|
+| 1 | Every stall dropped the block RAM output, so each load deleted the 4th instruction after it | Re-present `pc_prev` to the RAM while stalled |
+| 2 | The load-use hazard check compared ID against EX/MEM instead of ID/EX | Feed the hazard unit from ID/EX |
+| 3 | The bubble overwrote ID/EX while EX/MEM was frozen | Hold ID/EX during a memory stall |
+| 4 | A branch fired during a memory stall and was lost | Gate branch and jump with `!mem_stall` |
+| 5 | The first instruction after reset ran twice | Turn the duplicate fetch into a NOP |
+
+With the fixes: 7 of 7 directed cases, 1,000 of 1,000 random programs, and the 83 cocotb tests still pass.
+
 ### Microarchitecture
 
 - Prefetch buffer absorbing the BRAM's registered-read latency
 - EX/MEM→EX and MEM/WB→EX forwarding paths
-- Load-use hazard detection with a single-cycle stall
-- 2-cycle branch flush, extended to drain the prefetch buffer
+- Load-use hazard detection: every load costs 1 extra cycle, and a dependent instruction right after it 1 more
+- Branches resolve in Execute: a taken branch costs 4 cycles, a not-taken branch 0
 - Register-file read-during-write bypass
 - Byte/halfword load-store with sign and zero extension
 
@@ -75,16 +92,16 @@ used by polling.
 
 The CPU is a 5-stage in-order pipeline:
 
-[ Fetch ] -> [ Decode ] -> [ Execute ] -> [ Memory ] -> [ Writeback ]
+![RV32I five-stage pipeline](SoC%20Firmware%20Project/docs/cpu_pipeline_5stage.svg)
 
 ### Key features
 
 - Prefetch buffer: absorbs the BRAM's 1-cycle registered read latency so the pipeline always sees a valid instruction
 - Data forwarding: EX/MEM→EX and MEM/WB→EX paths feed the ALU directly from in-flight results, eliminating most stall cycles
 - Load-use stall: 1-cycle pipeline freeze when a load result is needed by the immediately following instruction
-- Memory stall: pipeline freezes while waiting for BRAM data to arrive from a load
-- Hazard detection: dedicated unit (`rv32i_hazard.v`) detects load-use hazards and inserts NOP bubbles
-- Branch flushing: 2-cycle flush on taken branches and jumps, extended by `flush_delay` to drain the prefetch buffer
+- Memory stall: every load freezes the pipeline for 1 cycle while the registered BRAM read completes
+- Hazard detection: dedicated unit (`rv32i_hazard.v`) compares the instruction in Decode against the load in ID/EX and inserts NOP bubbles
+- Branch flushing: taken branches and jumps resolve in Execute and cost 4 cycles, because the registered BRAM read and the prefetch buffer put extra wrong-path instructions in flight; `flush_delay` drains the buffer
 - JALR: correctly computes `(rs1 + imm) & ~1` (distinct from JAL which uses `PC + imm`)
 - Correct branch conditions: BLT/BGE/BLTU/BGEU use the SLT output bit, not the sign bit
 - Byte/halfword load-store: LB, LH, LBU, LHU, SB, SH with proper sign/zero extension and byte-enable strobes

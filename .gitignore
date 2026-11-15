@@ -29,3 +29,6 @@ SoC Firmware Project/sim/results_*.xml
 vivado*.jou
 vivado*.log
 .Xil/
+
+# Random-program check scratch files
+SoC Firmware Project/sim/cpu_check/build/
